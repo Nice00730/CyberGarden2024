@@ -1,5 +1,15 @@
 #include <AppCore/CAPI.h>
+#include <AppCore/AppCore.h>
 #include <JavaScriptCore/JavaScript.h>
+#include <JavaScriptCore/JSRetainPtr.h>
+#include <windows.h>
+#include <thread>
+#include "back.h"
+
+using ultralight::JSObject;
+using ultralight::JSArgs;
+using ultralight::JSFunction;
+using namespace ultralight;
 
 ///
 ///  Welcome to Sample 6!
@@ -23,11 +33,73 @@
 ///  ownership/destruction: You should explicitly Destroy/Release anything you Create.
 ///
 
+std::wstring openFileDialogue()
+{
+    OPENFILENAME ofn;       // common dialog box structure
+    wchar_t szFile[260];       // buffer for file name
+    HANDLE hf;              // file handle
+    // Initialize OPENFILENAME
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.lpstrFile = szFile;
+    // Set lpstrFile[0] to '\0' so that GetOpenFileName does not 
+    // use the contents of szFile to initialize itself.
+    ofn.lpstrFile[0] = '\0';
+    ofn.nMaxFile = sizeof(szFile);
+    ofn.lpstrFilter = L"Video\0*\0";//"All\0*.*\0Text\0*.TXT\0"
+    ofn.nFilterIndex = 1;
+    ofn.lpstrFileTitle = NULL;
+    ofn.nMaxFileTitle = 0;
+    ofn.lpstrInitialDir = NULL;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+    GetOpenFileName(&ofn);
+    // Display the Open dialog box. 
+    /*if (GetOpenFileName(&ofn) == TRUE)
+    {
+        std::wcout << std::wstring(szFile);
+    }*/
+
+    return std::wstring(szFile);
+}
+
+std::wstring saveFileDialogue()
+{
+    OPENFILENAME ofn;       // common dialog box structure
+    wchar_t szFile[260];       // buffer for file name
+    HANDLE hf;              // file handle
+    // Initialize OPENFILENAME
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.lpstrFile = szFile;
+    // Set lpstrFile[0] to '\0' so that GetOpenFileName does not 
+    // use the contents of szFile to initialize itself.
+    ofn.lpstrFile[0] = '\0';
+    ofn.nMaxFile = sizeof(szFile);
+    ofn.lpstrFilter = L"Video\0*.\0";//"All\0*.*\0Text\0*.TXT\0"
+    ofn.nFilterIndex = 1;
+    ofn.lpstrFileTitle = NULL;
+    ofn.nMaxFileTitle = 0;
+    ofn.lpstrInitialDir = NULL;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+    GetSaveFileName(&ofn);
+    // Display the Open dialog box. 
+    /*if (GetOpenFileName(&ofn) == TRUE)
+    {
+        std::wcout << std::wstring(szFile);
+    }*/
+
+    return std::wstring(szFile);
+}
+
 /// Various globals
 ULApp app = 0;
 ULWindow window = 0;
 ULOverlay overlay = 0;
 ULView view = 0;
+
+std::thread* matThread;
+std::wstring openedFileName = L"in.mp4";
+std::wstring savedFileName = L"out.mp4";
 
 /// Forward declaration of our OnUpdate callback.
 void OnUpdate(void* user_data);
@@ -73,8 +145,7 @@ void Init()
     ///
     /// Create our window, make it 500x500 with a titlebar and resize handles.
     ///
-    window = ulCreateWindow(ulAppGetMainMonitor(app), 500, 500, false,
-        kWindowFlags_Titled | kWindowFlags_Resizable);
+    window = ulCreateWindow(ulAppGetMainMonitor(app), 680, 480, false, ultralight::kWindowFlags_Titled);
 
     ///
     /// Set our window title.
@@ -124,13 +195,41 @@ void Init()
     ulDestroyString(url);
 }
 
+void hide();
+void complete();
+void postprocess();
+
 ///
 /// This is called continuously from the app's main run loop. You should update any app logic
 /// inside this callback.
 ///
 void OnUpdate(void* user_data) 
 {
-    /// We don't use this in this tutorial, just here for example.
+    if (startRender == 3)
+    {
+        if (openedFileName != L"" && savedFileName != L"")
+        {
+            matThread = new std::thread(renderVid, openedFileName, savedFileName);
+        }
+        startRender++;
+    }
+    else if (!startRender && percent == 101)
+    {
+        complete();
+        percent = -1;
+    }
+    else if (percent == 100)
+    {
+        postprocess();
+    }
+    else if (startRender < 3 && startRender > 0)
+    {
+        startRender++;
+    }
+    else if (startRender == 4 && percent != -1)
+    {
+        setprogress(std::to_string(percent).c_str());
+    }
 }
 
 ///
@@ -149,40 +248,87 @@ void OnResize(void* user_data, ULWindow window, unsigned int width, unsigned int
     ulOverlayResize(overlay, width, height);
 }
 
-///
-/// This callback is bound to a JavaScript function on the page.
-///
-JSValueRef GetMessage(JSContextRef ctx, JSObjectRef function, JSObjectRef thisObject, size_t argumentCount, const JSValueRef arguments[], JSValueRef* exception) 
+JSValueRef openFileUI(JSContextRef ctx, JSObjectRef function, JSObjectRef thisObject, size_t argumentCount, const JSValueRef arguments[], JSValueRef* exception) 
 {
+    /*const char* str = "document.getElementById('btn').innerHTML = 'Jerk Me!';";
 
-    ///
-    /// Create a JavaScript String from a C-string, initialize it with our
-    /// welcome message.
-    ///
-    JSStringRef str = JSStringCreateWithUTF8CString("Hello from C!");
+    // Create our string of JavaScript
+    JSStringRef script = JSStringCreateWithUTF8CString(str);
 
-    ///
-    /// Create a garbage-collected JSValue using the String we just created.
-    ///
-    ///  **Note**:
-    ///    Both JSValueRef and JSObjectRef types are garbage-collected types. (And actually,
-    ///    JSObjectRef is just a typedef of JSValueRef, they share definitions).
-    ///
-    ///    The garbage collector in JavaScriptCore periodically scans the entire stack to check if
-    ///    there are any active JSValueRefs, and marks those with no references for destruction.
-    ///
-    ///    If you happen to store a JSValueRef/JSObjectRef in heap memory or in memory unreachable
-    ///    by the stack-based garbage-collector, you should explicitly call JSValueProtect() and
-    ///    JSValueUnprotect() on the reference to ensure it is kept alive.
-    ///
-    JSValueRef value = JSValueMakeString(ctx, str);
+    // Execute it with JSEvaluateScript, ignoring other parameters for now
+    JSEvaluateScript(ctx, script, 0, 0, 0, 0);   
 
-    ///
-    /// Release the string we created earlier (we only Release what we Create).
-    ///
-    JSStringRelease(str);
+    // Release our string (we only Release what we Create)
+    JSStringRelease(script);*/
 
-    return value;
+    if (!startRender)
+    {
+        hide();
+
+        openedFileName = L"";
+
+        openedFileName = openFileDialogue();
+
+        std::wstring str = L"document.getElementById('open').innerHTML = 'Open: " + openedFileName + L"';";
+        std::replace(str.begin(), str.end(), '\\', '/');
+        JSChar* utfarr = new JSChar[str.length()];
+        for (unsigned int i = 0; i < str.length(); i++)
+        {
+            utfarr[i] = str[i];
+        }
+        JSStringRef script = JSStringCreateWithCharacters(utfarr, str.length());
+        JSEvaluateScript(ctx, script, 0, 0, 0, 0);
+        JSStringRelease(script);
+    }
+
+    return JSValueMakeNull(ctx);
+}
+
+JSValueRef saveFileUI(JSContextRef ctx, JSObjectRef function, JSObjectRef thisObject, size_t argumentCount, const JSValueRef arguments[], JSValueRef* exception)
+{
+    if (!startRender)
+    {
+        hide();
+
+        savedFileName = L"";
+
+        savedFileName = saveFileDialogue();
+
+        std::wstring str = L"document.getElementById('save').innerHTML = 'Save: " + savedFileName + L"';";
+        std::replace(str.begin(), str.end(), '\\', '/');
+        JSChar* utfarr = new JSChar[str.length()];
+        for (unsigned int i = 0; i < str.length(); i++)
+        {
+            utfarr[i] = str[i];
+        }
+        JSStringRef script = JSStringCreateWithCharacters(utfarr, str.length());
+        JSEvaluateScript(ctx, script, 0, 0, 0, 0);
+        JSStringRelease(script);
+    }
+    return JSValueMakeNull(ctx);
+}
+
+JSValueRef startUI(JSContextRef ctx, JSObjectRef function, JSObjectRef thisObject, size_t argumentCount, const JSValueRef arguments[], JSValueRef* exception)
+{
+    if (!startRender && openedFileName != L"" && savedFileName != L"")
+    {
+        short int percent = -1;
+
+        hide();
+
+        std::wstring str = L"document.getElementById('progress_cont').className = 'progress-container';document.getElementById('progress_status').innerHTML = 'Preprocessing...';document.getElementById('progress').value = 0;";
+        JSChar* utfarr = new JSChar[str.length()];
+        for (unsigned int i = 0; i < str.length(); i++)
+        {
+            utfarr[i] = str[i];
+        }
+        JSStringRef script = JSStringCreateWithCharacters(utfarr, str.length());
+        JSEvaluateScript(ctx, script, 0, 0, 0, 0);
+        JSStringRelease(script);
+
+        startRender = 1;
+    }
+    return JSValueMakeNull(ctx);
 }
 
 ///
@@ -199,35 +345,101 @@ void OnDOMReady(void* user_data, ULView caller, unsigned long long frame_id, boo
     /// unlock it when we're done via ulViewUnlockJSContext().
     ///
     JSContextRef ctx = ulViewLockJSContext(view);
-
-    ///
-    /// Create a JavaScript String containing the name of our callback.
-    ///
-    JSStringRef name = JSStringCreateWithUTF8CString("GetMessage");
-
-    ///
-    /// Create a garbage-collected JavaScript function that is bound to our native C callback 
-    /// 'GetMessage()'.
-    ///
-    JSObjectRef func = JSObjectMakeFunctionWithCallback(ctx, name, GetMessage);
-
-    ///
-    /// Store our function in the page's global JavaScript object so that it is accessible from the
-    /// page as 'GetMessage()'.
-    ///
-    /// The global JavaScript object is also known as 'window' in JS.
-    ///
+    
+    JSStringRef name = JSStringCreateWithUTF8CString("openFileUI");
+    JSObjectRef func = JSObjectMakeFunctionWithCallback(ctx, name, openFileUI);
     JSObjectSetProperty(ctx, JSContextGetGlobalObject(ctx), name, func, 0, 0);
+    JSStringRelease(name);
 
-    ///
-    /// Release the JavaScript String we created earlier.
-    ///
+    name = JSStringCreateWithUTF8CString("saveFileUI");
+    func = JSObjectMakeFunctionWithCallback(ctx, name, saveFileUI);
+    JSObjectSetProperty(ctx, JSContextGetGlobalObject(ctx), name, func, 0, 0);
+    JSStringRelease(name);
+
+    name = JSStringCreateWithUTF8CString("startUI");
+    func = JSObjectMakeFunctionWithCallback(ctx, name, startUI);
+    JSObjectSetProperty(ctx, JSContextGetGlobalObject(ctx), name, func, 0, 0);
     JSStringRelease(name);
 
     ///
     /// Unlock the JS context so other threads can modify JavaScript state.
     ///
     ulViewUnlockJSContext(view);
+}
+
+void hide()
+{
+    JSContextRef ctx = ulViewLockJSContext(view);
+    JSRetainPtr<JSStringRef> str = adopt(JSStringCreateWithUTF8CString("hide"));
+    JSValueRef etc = JSEvaluateScript(ctx, str.get(), 0, 0, 0, 0);
+    if (JSValueIsObject(ctx, etc))
+    {
+        JSObjectRef funcObj = JSValueToObject(ctx, etc, 0);
+        if (funcObj && JSObjectIsFunction(ctx, funcObj))
+        {
+            JSObjectCallAsFunction(ctx, funcObj, 0, 0, 0, 0);
+        }
+    }
+    ulViewUnlockJSContext(view);
+
+    return;
+}
+
+void postprocess()
+{
+    JSContextRef ctx = ulViewLockJSContext(view);
+    JSRetainPtr<JSStringRef> str = adopt(JSStringCreateWithUTF8CString("postprocess"));
+    JSValueRef etc = JSEvaluateScript(ctx, str.get(), 0, 0, 0, 0);
+    if (JSValueIsObject(ctx, etc))
+    {
+        JSObjectRef funcObj = JSValueToObject(ctx, etc, 0);
+        if (funcObj && JSObjectIsFunction(ctx, funcObj))
+        {
+            JSObjectCallAsFunction(ctx, funcObj, 0, 0, 0, 0);
+        }
+    }
+    ulViewUnlockJSContext(view);
+
+    return;
+}
+
+void complete()
+{
+    JSContextRef ctx = ulViewLockJSContext(view);
+    JSRetainPtr<JSStringRef> str = adopt(JSStringCreateWithUTF8CString("complete"));
+    JSValueRef etc = JSEvaluateScript(ctx, str.get(), 0, 0, 0, 0);
+    if (JSValueIsObject(ctx, etc))
+    {
+        JSObjectRef funcObj = JSValueToObject(ctx, etc, 0);
+        if (funcObj && JSObjectIsFunction(ctx, funcObj))
+        {
+            JSObjectCallAsFunction(ctx, funcObj, 0, 0, 0, 0);
+        }
+    }
+    ulViewUnlockJSContext(view);
+
+    return;
+}
+
+void setprogress(const char* inp)
+{
+    JSContextRef ctx = ulViewLockJSContext(view);
+    JSRetainPtr<JSStringRef> str = adopt(JSStringCreateWithUTF8CString("progressBarProg"));
+    JSValueRef etc = JSEvaluateScript(ctx, str.get(), 0, 0, 0, 0);
+    if (JSValueIsObject(ctx, etc))
+    {
+        JSObjectRef funcObj = JSValueToObject(ctx, etc, 0);
+        if (funcObj && JSObjectIsFunction(ctx, funcObj))
+        {
+            JSRetainPtr<JSStringRef> msg = adopt(JSStringCreateWithUTF8CString(inp));
+            const JSValueRef args[] = { JSValueMakeString(ctx, msg.get()) };
+            size_t num_args = sizeof(args) / sizeof(JSValueRef*);
+            JSObjectCallAsFunction(ctx, funcObj, 0, num_args, args, 0);
+        }
+    }
+    ulViewUnlockJSContext(view);
+
+    return;
 }
 
 ///
